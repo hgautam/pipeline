@@ -90,6 +90,34 @@ func TestPipelineRun_Invalidate(t *testing.T) {
 				},
 			},
 			want: apis.ErrInvalidValue("PipelineRunCancell should be PipelineRunCancelled", "spec.status"),
+		}, {
+			name: "bundle missing name",
+			pr: v1beta1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "pipelinelineName",
+				},
+				Spec: v1beta1.PipelineRunSpec{
+					PipelineRef: &v1beta1.PipelineRef{
+						Bundle: "docker.io/foo",
+					},
+					PipelineSpec: &v1beta1.PipelineSpec{Description: "foo"},
+				},
+			},
+			want: apis.ErrMissingField("spec.pipelineref.name"),
+		}, {
+			name: "invalid bundle reference",
+			pr: v1beta1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "pipelinelineName",
+				},
+				Spec: v1beta1.PipelineRunSpec{
+					PipelineRef: &v1beta1.PipelineRef{
+						Name:   "my-pipeline",
+						Bundle: "not a valid reference",
+					},
+				},
+			},
+			want: apis.ErrInvalidValue("invalid bundle reference (could not parse reference: not a valid reference)", "spec.pipelineref.bundle"),
 		},
 	}
 
@@ -107,34 +135,70 @@ func TestPipelineRun_Validate(t *testing.T) {
 	tests := []struct {
 		name string
 		pr   v1beta1.PipelineRun
-	}{
-		{
-			name: "normal case",
-			pr: v1beta1.PipelineRun{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "pipelinelineName",
-				},
-				Spec: v1beta1.PipelineRunSpec{
-					PipelineRef: &v1beta1.PipelineRef{
-						Name: "prname",
-					},
-				},
+	}{{
+		name: "normal case",
+		pr: v1beta1.PipelineRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pipelinelineName",
 			},
-		}, {
-			name: "no timeout",
-			pr: v1beta1.PipelineRun{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "pipelinelineName",
-				},
-				Spec: v1beta1.PipelineRunSpec{
-					PipelineRef: &v1beta1.PipelineRef{
-						Name: "prname",
-					},
-					Timeout: &metav1.Duration{Duration: 0},
+			Spec: v1beta1.PipelineRunSpec{
+				PipelineRef: &v1beta1.PipelineRef{
+					Name: "prname",
 				},
 			},
 		},
-	}
+	}, {
+		name: "no timeout",
+		pr: v1beta1.PipelineRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pipelinelineName",
+			},
+			Spec: v1beta1.PipelineRunSpec{
+				PipelineRef: &v1beta1.PipelineRef{
+					Name: "prname",
+				},
+				Timeout: &metav1.Duration{Duration: 0},
+			},
+		},
+	}, {
+		name: "array param with pipelinespec and taskspec",
+		pr: v1beta1.PipelineRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pipelinelineName",
+			},
+			Spec: v1beta1.PipelineRunSpec{
+				PipelineSpec: &v1beta1.PipelineSpec{
+					Params: []v1beta1.ParamSpec{{
+						Name: "pipeline-words",
+						Type: v1beta1.ParamTypeArray,
+					}},
+					Tasks: []v1beta1.PipelineTask{{
+						Name: "echoit",
+						Params: []v1beta1.Param{{
+							Name: "task-words",
+							Value: v1beta1.ArrayOrString{
+								ArrayVal: []string{"$(params.pipeline-words)"},
+							},
+						}},
+						TaskSpec: &v1beta1.EmbeddedTask{TaskSpec: v1beta1.TaskSpec{
+							Params: []v1beta1.ParamSpec{{
+								Name: "task-words",
+								Type: v1beta1.ParamTypeArray,
+							}},
+							Steps: []v1beta1.Step{{
+								Container: corev1.Container{
+									Name:    "echo",
+									Image:   "ubuntu",
+									Command: []string{"echo"},
+									Args:    []string{"$(params.task-words[*])"},
+								},
+							}},
+						}},
+					}},
+				},
+			},
+		},
+	}}
 
 	for _, ts := range tests {
 		t.Run(ts.name, func(t *testing.T) {

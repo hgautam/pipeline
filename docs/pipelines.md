@@ -12,6 +12,7 @@ weight: 3
   - [Specifying `Workspaces`](#specifying-workspaces)
   - [Specifying `Parameters`](#specifying-parameters)
   - [Adding `Tasks` to the `Pipeline`](#adding-tasks-to-the-pipeline)
+    - [Using Tekton Bundles](#tekton-bundles)
     - [Using the `from` parameter](#using-the-from-parameter)
     - [Using the `runAfter` parameter](#using-the-runafter-parameter)
     - [Using the `retries` parameter](#using-the-retries-parameter)
@@ -115,6 +116,7 @@ spec:
 For more information, see:
 - [Using `Workspaces` in `Pipelines`](workspaces.md#using-workspaces-in-pipelines)
 - The [`Workspaces` in a `PipelineRun`](../examples/v1beta1/pipelineruns/workspaces.yaml) code example
+- The [variables available in a `PipelineRun`](variables.md#variables-available-in-a-pipeline), including `workspaces.<name>.bound`.
 
 ## Specifying `Parameters`
 
@@ -227,6 +229,55 @@ spec:
           value: /workspace/examples/microservices/leeroy-web
 ```
 
+### Tekton Bundles
+
+You may also specify your `Task` reference using a `Tekton Bundle`. A `Tekton Bundle` is an OCI artifact that
+contains Tekton resources like `Tasks` which can be referenced within a `taskRef`.
+
+ ```yaml
+ spec:
+   tasks:
+     - name: hello-world
+       taskRef:
+         name: echo-task
+         bundle: docker.com/myrepo/mycatalog
+ ```
+
+Here, the `bundle` field is the full reference url to the artifact. The name is the
+`metadata.name` field of the `Task`. 
+
+You may also specify a `tag` as you would with a Docker image which will give you a fixed,
+repeatable reference to a `Task`.
+
+ ```yaml
+ spec:
+   tasks:
+   - name: hello-world
+     taskRef:
+       name: echo-task
+       bundle: docker.com/myrepo/mycatalog:v1.0.1
+ ```
+
+You may also specify a fixed digest instead of a tag.
+
+ ```yaml
+ spec:
+   tasks:
+   - name: hello-world  
+     taskRef:
+       name: echo-task
+       bundle: docker.io/myrepo/mycatalog@sha256:abc123
+ ```
+
+Any of the above options will fetch the image using the `ImagePullSecrets` attached to the
+`ServiceAccount` specified in the `PipelineRun`. See the [Service Account](
+pipelineruns.md#service-accounts) section for details on how to configure a `ServiceAccount`
+on a `PipelineRun`. The `PipelineRun` will then run that `Task` without registering it in
+the cluster allowing multiple versions of the same named `Task` to be run at once.
+
+`Tekton Bundles` may be constructed with any toolsets that produce valid OCI image artifacts
+so long as the artifact adheres to the [contract](tekton-bundle-contract.md).
+
 ### Using the `from` parameter
 
 If a `Task` in your `Pipeline` needs to use the output of a previous `Task`
@@ -324,13 +375,13 @@ To run a `Task` only when certain conditions are met, it is possible to _guard_ 
 The components of `WhenExpressions` are `Input`, `Operator` and `Values`:
 - `Input` is the input for the `WhenExpression` which can be static inputs or variables ([`Parameters`](#specifying-parameters) or [`Results`](#using-results)). If the `Input` is not provided, it defaults to an empty string.
 - `Operator` represents an `Input`'s relationship to a set of `Values`. A valid `Operator` must be provided, which can be either `in` or `notin`.
-- `Values` is an array of string values. The `Values` array must be provided and be non-empty. It can contain static values or variables ([`Parameters`](#specifying-parameters) or [`Results`](#using-results)).
+- `Values` is an array of string values. The `Values` array must be provided and be non-empty. It can contain static values or variables ([`Parameters`](#specifying-parameters), [`Results`](#using-results) or [a Workspaces's `bound` state](#specifying-workspaces)).
 
 The [`Parameters`](#specifying-parameters) are read from the `Pipeline` and [`Results`](#using-results) are read directly from previous [`Tasks`](#adding-tasks-to-the-pipeline). Using [`Results`](#using-results) in a `WhenExpression` in a guarded `Task` introduces a resource dependency on the previous `Task` that produced the `Result`. 
 
 The declared `WhenExpressions` are evaluated before the `Task` is run. If all the `WhenExpressions` evaluate to `True`, the `Task` is run. If any of the `WhenExpressions` evaluate to `False`, the `Task` is not run and the `Task` is listed in the [`Skipped Tasks` section of the `PipelineRunStatus`](pipelineruns.md#monitoring-execution-status). 
 
-In these examples, `first-create-file` task will only be executed if the `path` parameter is `README.md` and `echo-file-exists` task will only be executed if the `exists` result from `check-file` task is `yes`. 
+In these examples, `first-create-file` task will only be executed if the `path` parameter is `README.md`, `echo-file-exists` task will only be executed if the `exists` result from `check-file` task is `yes` and `run-lint` task will only be executed if the `lint-config` optional workspace has been provided by a PipelineRun. 
 
 ```yaml
 tasks:
@@ -350,6 +401,15 @@ tasks:
         values: ["yes"]
     taskRef:
         name: echo-file-exists
+---
+tasks:
+  - name: run-lint
+    when:
+      - input: "$(workspaces.lint-config.bound)"
+        operator: in
+        values: ["true"]
+    taskRef:
+      name: lint-source
 ```
 
 For an end-to-end example, see [PipelineRun with WhenExpressions](../examples/v1beta1/pipelineruns/pipelinerun-with-when-expressions.yaml).
@@ -362,6 +422,7 @@ There are a lot of scenarios where `WhenExpressions` can be really useful. Some 
 - Checking if a git file has changed in the previous commits
 - Checking if an image exists in the registry
 - Checking if the name of a CI job matches
+- Checking if an optional Workspace has been provided
 
 ### Guard `Task` execution using `Conditions`
 
@@ -477,6 +538,13 @@ before this one.
 params:
   - name: foo
     value: "$(tasks.checkout-source.results.commit)"
+```
+
+**Note:** If `checkout-source` exits successfully without initializing `commit` `Result`,
+the receiving `Task` fails and causes the `Pipeline` to fail with `InvalidTaskResultReference`:
+
+```
+unable to find result referenced by param 'foo' in 'task';: Could not find result with name 'commit' for task run 'checkout-source'
 ```
 
 In the snippet below, a `WhenExpression` is provided its value from the `exists` `Result` emitted by the

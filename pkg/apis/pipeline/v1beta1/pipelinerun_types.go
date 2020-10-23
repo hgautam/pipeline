@@ -202,6 +202,9 @@ type PipelineRef struct {
 	// API version of the referent
 	// +optional
 	APIVersion string `json:"apiVersion,omitempty"`
+	// Bundle url reference to a Tekton Bundle.
+	// +optional
+	Bundle string `json:"bundle,omitempty"`
 }
 
 // PipelineRunStatus defines the observed state of PipelineRun
@@ -342,6 +345,9 @@ type PipelineRunStatusFields struct {
 type SkippedTask struct {
 	// Name is the Pipeline Task name
 	Name string `json:"name"`
+	// WhenExpressions is the list of checks guarding the execution of the PipelineTask
+	// +optional
+	WhenExpressions []WhenExpression `json:"whenExpressions,omitempty"`
 }
 
 // PipelineRunResult used to describe the results of a pipeline
@@ -363,6 +369,9 @@ type PipelineRunTaskRunStatus struct {
 	// ConditionChecks maps the name of a condition check to its Status
 	// +optional
 	ConditionChecks map[string]*PipelineRunConditionCheckStatus `json:"conditionChecks,omitempty"`
+	// WhenExpressions is the list of checks guarding the execution of the PipelineTask
+	// +optional
+	WhenExpressions []WhenExpression `json:"whenExpressions,omitempty"`
 }
 
 // PipelineRunConditionCheckStatus returns the condition check status
@@ -413,8 +422,12 @@ func (pr *PipelineRun) GetTaskRunSpecs(pipelineTaskName string) (string, *PodTem
 	taskPodTemplate := pr.Spec.PodTemplate
 	for _, task := range pr.Spec.TaskRunSpecs {
 		if task.PipelineTaskName == pipelineTaskName {
-			taskPodTemplate = task.TaskPodTemplate
-			serviceAccountName = task.TaskServiceAccountName
+			if task.TaskPodTemplate != nil {
+				taskPodTemplate = task.TaskPodTemplate
+			}
+			if task.TaskServiceAccountName != "" {
+				serviceAccountName = task.TaskServiceAccountName
+			}
 		}
 	}
 	return serviceAccountName, taskPodTemplate
