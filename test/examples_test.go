@@ -93,7 +93,7 @@ func substituteEnv(input []byte, namespace string) ([]byte, error) {
 // koCreate wraps the ko binary and invokes `ko create` for input within
 // namespace
 func koCreate(input []byte, namespace string) ([]byte, error) {
-	cmd := exec.Command("ko", "create", "-n", namespace, "-f", "-")
+	cmd := exec.Command("ko", "create", "--platform", "linux/"+getTestArch(), "-n", namespace, "-f", "-")
 	cmd.Stdin = bytes.NewReader(input)
 	return cmd.CombinedOutput()
 }
@@ -218,6 +218,7 @@ func TestExamples(t *testing.T) {
 
 	t.Parallel()
 	for _, path := range getExamplePaths(t, baseDir) {
+		path := path // capture range variable
 		testName := extractTestName(baseDir, path)
 		waitValidateFunc := waitValidatePipelineRunDone
 		kind := "pipelinerun"

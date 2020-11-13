@@ -40,10 +40,9 @@ import (
 	ttesting "github.com/tektoncd/pipeline/pkg/reconciler/testing"
 	"github.com/tektoncd/pipeline/pkg/reconciler/volumeclaim"
 	"github.com/tektoncd/pipeline/pkg/system"
-	"github.com/tektoncd/pipeline/pkg/timeout"
 	"github.com/tektoncd/pipeline/pkg/version"
 	"github.com/tektoncd/pipeline/pkg/workspace"
-	test "github.com/tektoncd/pipeline/test"
+	"github.com/tektoncd/pipeline/test"
 	"github.com/tektoncd/pipeline/test/diff"
 	"github.com/tektoncd/pipeline/test/names"
 	corev1 "k8s.io/api/core/v1"
@@ -59,6 +58,7 @@ import (
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
+	"knative.dev/pkg/kmeta"
 	"knative.dev/pkg/logging"
 	pkgreconciler "knative.dev/pkg/reconciler"
 )
@@ -1748,8 +1748,8 @@ func TestReconcileInvalidTaskRuns(t *testing.T) {
 
 			// Check actions and events
 			actions := clients.Kube.Actions()
-			if len(actions) != 3 || actions[0].Matches("namespaces", "list") {
-				t.Errorf("expected 3 actions (first: list namespaces) created by the reconciler, got %d. Actions: %#v", len(actions), actions)
+			if len(actions) != 2 {
+				t.Errorf("expected 2 actions, got %d. Actions: %#v", len(actions), actions)
 			}
 
 			err := checkEvents(t, testAssets.Recorder, tc.name, tc.wantEvents)
@@ -1772,6 +1772,57 @@ func TestReconcileInvalidTaskRuns(t *testing.T) {
 		})
 	}
 
+}
+
+func TestReconcileTaskRunWithPermanentError(t *testing.T) {
+	noTaskRun := tb.TaskRun("notaskrun", tb.TaskRunNamespace("foo"), tb.TaskRunSpec(tb.TaskRunTaskRef("notask")),
+		tb.TaskRunStatus(tb.TaskRunStartTime(time.Now()),
+			tb.StatusCondition(apis.Condition{
+				Type:    apis.ConditionSucceeded,
+				Status:  corev1.ConditionFalse,
+				Reason:  podconvert.ReasonFailedResolution,
+				Message: "error when listing tasks for taskRun taskrun-failure: tasks.tekton.dev \"notask\" not found",
+			})))
+
+	taskRuns := []*v1beta1.TaskRun{noTaskRun}
+
+	d := test.Data{
+		TaskRuns: taskRuns,
+	}
+
+	testAssets, cancel := getTaskRunController(t, d)
+	defer cancel()
+	c := testAssets.Controller
+	clients := testAssets.Clients
+	reconcileErr := c.Reconciler.Reconcile(context.Background(), getRunName(noTaskRun))
+
+	// When a TaskRun was rejected with a permanent error, reconciler must stop and forget about the run
+	// Such TaskRun enters Reconciler and from within the isDone block, marks the run success so that
+	// reconciler does not keep trying to reconcile
+	if reconcileErr != nil {
+		t.Fatalf("Expected to see no error when reconciling TaskRun with Permanent Error but was not none")
+	}
+
+	// Check actions
+	actions := clients.Kube.Actions()
+	if len(actions) != 2 || !actions[0].Matches("list", "configmaps") || !actions[1].Matches("watch", "configmaps") {
+		t.Errorf("expected 2 actions (list configmaps, and watch configmaps) created by the reconciler,"+
+			" got %d. Actions: %#v", len(actions), actions)
+	}
+
+	newTr, err := clients.Pipeline.TektonV1beta1().TaskRuns(noTaskRun.Namespace).Get(context.Background(), noTaskRun.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Expected TaskRun %s to exist but instead got error when getting it: %v", noTaskRun.Name, err)
+	}
+
+	// Since the TaskRun is invalid, the status should say it has failed
+	condition := newTr.Status.GetCondition(apis.ConditionSucceeded)
+	if condition == nil || condition.Status != corev1.ConditionFalse {
+		t.Errorf("Expected invalid TaskRun to have failed status, but had %v", condition)
+	}
+	if condition != nil && condition.Reason != podconvert.ReasonFailedResolution {
+		t.Errorf("Expected failure to be because of reason %q but was %s", podconvert.ReasonFailedResolution, condition.Reason)
+	}
 }
 
 func TestReconcilePodFetchError(t *testing.T) {
@@ -2132,15 +2183,14 @@ func TestHandlePodCreationError(t *testing.T) {
 		taskLister:        testAssets.Informers.Task.Lister(),
 		clusterTaskLister: testAssets.Informers.ClusterTask.Lister(),
 		resourceLister:    testAssets.Informers.PipelineResource.Lister(),
-		timeoutHandler:    timeout.NewHandler(ctx.Done(), testAssets.Logger),
-		cloudEventClient:  testAssets.Clients.CloudEvents,
-		metrics:           nil, // Not used
-		entrypointCache:   nil, // Not used
-		pvcHandler:        volumeclaim.NewPVCHandler(testAssets.Clients.Kube, testAssets.Logger),
+		snooze: func(acc kmeta.Accessor, amnt time.Duration) {
+			t.Error("Unexpected call to snooze.")
+		},
+		cloudEventClient: testAssets.Clients.CloudEvents,
+		metrics:          nil, // Not used
+		entrypointCache:  nil, // Not used
+		pvcHandler:       volumeclaim.NewPVCHandler(testAssets.Clients.Kube, testAssets.Logger),
 	}
-
-	// Prevent backoff timer from starting
-	c.timeoutHandler.SetCallbackFunc(nil)
 
 	testcases := []struct {
 		description    string
@@ -2566,7 +2616,7 @@ func TestReconcileValidDefaultWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := testAssets.Controller.Reconciler.Reconcile(context.Background(), getRunName(taskRun)); err != nil {
+	if err := testAssets.Controller.Reconciler.Reconcile(testAssets.Ctx, getRunName(taskRun)); err != nil {
 		t.Errorf("Expected no error reconciling valid TaskRun but got %v", err)
 	}
 
@@ -3183,11 +3233,13 @@ func TestFailTaskRun(t *testing.T) {
 				taskLister:        testAssets.Informers.Task.Lister(),
 				clusterTaskLister: testAssets.Informers.ClusterTask.Lister(),
 				resourceLister:    testAssets.Informers.PipelineResource.Lister(),
-				timeoutHandler:    nil, // Not used
-				cloudEventClient:  testAssets.Clients.CloudEvents,
-				metrics:           nil, // Not used
-				entrypointCache:   nil, // Not used
-				pvcHandler:        volumeclaim.NewPVCHandler(testAssets.Clients.Kube, testAssets.Logger),
+				snooze: func(acc kmeta.Accessor, amnt time.Duration) {
+					t.Error("Unexpected call to snooze.")
+				},
+				cloudEventClient: testAssets.Clients.CloudEvents,
+				metrics:          nil, // Not used
+				entrypointCache:  nil, // Not used
+				pvcHandler:       volumeclaim.NewPVCHandler(testAssets.Clients.Kube, testAssets.Logger),
 			}
 
 			err := c.failTaskRun(context.Background(), tc.taskRun, tc.reason, tc.message)

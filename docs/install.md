@@ -19,6 +19,8 @@ This guide explains how to install Tekton Pipelines. It covers the following top
    will create a cluster running locally, with RBAC enabled and your user granted
    the `cluster-admin` role.
 
+1. If you want to support high availability usecases, install a [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) on your cluster. 
+
 1. Choose the version of Tekton Pipelines you want to install. You have the following options:
 
    * **[Official](https://github.com/tektoncd/pipeline/releases)** - install this unless you have
@@ -262,6 +264,10 @@ data:
   default-cloud-events-sink: https://my-sink-url
 ```
 
+## Configuring self-signed cert for private registry
+
+The `SSL_CERT_DIR` is set to `/etc/ssl/certs` as the default cert directory. If you are using a self-signed cert for private registry and the cert file is not under the default cert directory, configure your registry cert in the `config-registry-cert` `ConfigMap` with the key `cert`.
+
 ## Customizing basic execution parameters
 
 You can specify your own values that replace the default service account (`ServiceAccount`), timeout (`Timeout`), and Pod template (`PodTemplate`) values used by Tekton Pipelines in `TaskRun` and `PipelineRun` definitions. To do so, modify the ConfigMap `config-defaults` with your desired values.
@@ -299,7 +305,7 @@ file lists the keys you can customize along with their default values.
 To customize the behavior of the Pipelines Controller, modify the ConfigMap `feature-flags` as follows:
 
 - `disable-affinity-assistant` - set this flag to `true` to disable the [Affinity Assistant](./workspaces.md#specifying-workspace-order-in-a-pipeline-and-affinity-assistants)
-  that is used to provide Node Affinity for `TaskRun` pods that share workspace volume. 
+  that is used to provide Node Affinity for `TaskRun` pods that share workspace volume.
   The Affinity Assistant is incompatible with other affinity rules
   configured for `TaskRun` pods.
 
@@ -322,7 +328,7 @@ for each `Step` that does not have its working directory explicitly set with `/w
 For more information, see the [associated issue](https://github.com/tektoncd/pipeline/issues/1836).
 
 - `running-in-environment-with-injected-sidecars`: set this flag to `"true"` to allow the
-Tekton controller to set the `tekton.dev/ready` annotation at pod creation time for 
+Tekton controller to set the `tekton.dev/ready` annotation at pod creation time for
 TaskRuns with no Sidecars specified. Enabling this option should decrease the time it takes for a TaskRun to
 start running. However, for clusters that use injected sidecars e.g. istio
 enabling this option can lead to unexpected behavior.
@@ -331,7 +337,15 @@ enabling this option can lead to unexpected behavior.
 Git SSH Secrets include a `known_hosts` field. This ensures that a git remote server's
 key is validated before data is accepted from it when authenticating over SSH. Secrets
 that don't include a `known_hosts` will result in the TaskRun failing validation and
-not running. 
+not running.
+
+- `enable-tekton-oci-bundles`: set this flag to `"true"` to enable the
+  tekton OCI bundle usage (see [the tekton bundle
+  contract](./tekton-bundle-contracts.md)). Enabling this option
+  allows the use of `bundle` field in `taskRef` and `pipelineRef` for
+  `Pipeline`, `PipelineRun` and `TaskRun`. By default, this option is
+  disabled (`"false"`), which means it is disallowed to use the
+  `bundle` field.
 
 For example:
 
@@ -345,9 +359,19 @@ data:
   disable-working-directory-overwrite: "true" # Tekton will not override the working directory for individual Steps.
 ```
 
+### Customizing High Availability for the Pipelines Controller
+
+To customize the behavior of HA for the Tekton Pipelines controller, please refer to the related [documentation](developers/enabling-ha.md).
+
 ## Creating a custom release of Tekton Pipelines
 
 You can create a custom release of Tekton Pipelines by following and customizing the steps in [Creating an official release](https://github.com/tektoncd/pipeline/blob/master/tekton/README.md#create-an-official-release). For example, you might want to customize the container images built and used by Tekton Pipelines.
+
+## Configuring High Availability
+
+If you want to run Tekton Pipelines in a way so that webhooks are resiliant against failures and support high concurrency scenarios, you need to run a [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) in your Kubernetes cluster. This is required by the [Horizontal Pod Autoscalers](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) to compute the replica count. 
+
+**Note:** The default configuration is defined in [webhook-hpa.yaml](./../config/webhook-hpa.yaml) which could be customized to better fit a  specific usecase.
 
 ## Next steps
 

@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	homedir "github.com/mitchellh/go-homedir"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"go.uber.org/zap"
 )
 
@@ -192,10 +193,7 @@ func SubmoduleFetch(logger *zap.SugaredLogger, spec FetchSpec) error {
 			return fmt.Errorf("failed to change directory with path %s; err: %w", spec.Path, err)
 		}
 	}
-	if _, err := run(logger, "", "submodule", "init"); err != nil {
-		return err
-	}
-	updateArgs := []string{"submodule", "update", "--recursive"}
+	updateArgs := []string{"submodule", "update", "--recursive", "--init"}
 	if spec.Depth > 0 {
 		updateArgs = append(updateArgs, fmt.Sprintf("--depth=%d", spec.Depth))
 	}
@@ -264,9 +262,8 @@ func userHasKnownHostsFile(logger *zap.SugaredLogger) (bool, error) {
 }
 
 func validateGitAuth(logger *zap.SugaredLogger, url string) {
-	homeenv := os.Getenv("HOME")
 	sshCred := true
-	if _, err := os.Stat(homeenv + "/.ssh"); os.IsNotExist(err) {
+	if _, err := os.Stat(pipeline.CredsDir + "/.ssh"); os.IsNotExist(err) {
 		sshCred = false
 	}
 	urlSSHFormat := ValidateGitSSHURLFormat(url)

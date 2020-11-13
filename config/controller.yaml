@@ -78,6 +78,8 @@ spec:
         volumeMounts:
         - name: config-logging
           mountPath: /etc/config-logging
+        - name: config-registry-cert
+          mountPath: /etc/config-registry-cert
         env:
         - name: SYSTEM_NAMESPACE
           valueFrom:
@@ -100,16 +102,42 @@ spec:
           value: feature-flags
         - name: CONFIG_LEADERELECTION_NAME
           value: config-leader-election
+        - name: SSL_CERT_FILE
+          value: /etc/config-registry-cert/cert
+        - name: SSL_CERT_DIR
+          value: /etc/ssl/certs
         - name: METRICS_DOMAIN
           value: tekton.dev/pipeline
         securityContext:
           allowPrivilegeEscalation: false
           # User 65532 is the distroless nonroot user ID
           runAsUser: 65532
+        ports:
+        - name: probes
+          containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: probes
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: probes
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
       volumes:
         - name: config-logging
           configMap:
             name: config-logging
+        - name: config-registry-cert
+          configMap:
+            name: config-registry-cert
 ---
 apiVersion: v1
 kind: Service
@@ -133,6 +161,8 @@ spec:
     port: 9090
     protocol: TCP
     targetPort: 9090
+  - name: probes
+    port: 8080
   selector:
     app.kubernetes.io/name: controller
     app.kubernetes.io/component: controller
